@@ -1,0 +1,278 @@
+-- Non-Binary Reed Solomon code Encoder
+library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+
+
+-- Entity declaration
+
+entity RME is 
+	generic(
+		m : integer := 2;				-- No. of variables in the polynomial
+		r : integer := 2;				-- Degree of the polynomial, 	r is less than or equal to m
+		q : integer := 4;				-- Size of the Field, i,e. operating in GF(q), q is a prime number, or a number which is a power of a prime number
+		l : integer := 2;				-- Length of each symbol will depend upon field size, intgeral value just greater than or equal to 
+											-- {[log(q) / log(2)]} The division returns only divisor
+		p : integer := 3;				-- No. of bits required for binary representation of q
+		k : integer := 6;				-- No. of input bits, k = (r+m) C (r)
+		n : integer := 16); 			-- No. of output bits, n = q^m
+
+	port(	
+		I : in std_logic_vector( (k*l) - 1 downto 0);							-- Input vector
+		O : out std_logic_vector( (n*l) - 1 downto 0));							-- Output vector
+end entity; 	
+
+architecture Behavorial of RME is
+
+-- The type INTEGERARRAY is used to define a 2-dimensioned matrix consisting of integers
+type INTEGERARRAY is array (natural range <>, natural range <>) of integer;
+signal IP : INTEGERARRAY(0 to 0, 0 to k-1);			-- A Matrix consisting of integers made from Input, of k length
+signal G : INTEGERARRAY(0 to k-1, 0 to n-1);			-- Generator Matrix
+signal OP : INTEGERARRAY(0 to 0, 0 to n-1);			-- A Matrix consisting of integers made from Output, of n length
+signal G1 : INTEGERARRAY(0 to m, 0 to n-1);
+signal I1 : std_logic_vector(p-1 downto 0);
+
+
+-- The below function GAL_MUL is used to multiply two integers, a and b, each of whose bits representation will 
+-- be of m-1 length, respectively. And the output would be part of GF(2**(m-1)), which depends on C.
+
+function GAL_MUL( a : integer := 7;
+						b : integer := 7;
+						C : std_logic_vector(p-1 downto 0)) return integer is
+	variable A1, A2, A3 : std_logic_vector( ( (2*(l)-1) - 1) downto 0); 
+	variable B1 : std_logic_vector(l-1 downto 0);
+	variable C1, C2, C3, D1 : std_logic_vector( ((2*(l) - 1) - 1) downto 0);
+
+begin
+
+	-- Converting integer a into a vector A1, which is its binary representation of length 2*(l)-1 and an integer b 
+	-- into a vector B1, which is its binary representation of length l
+	A1(((2*(l)-1) - 1) downto 0) := std_logic_vector(to_unsigned(a,2*(l)-1));
+	B1(l-1 downto 0) := std_logic_vector(to_unsigned(b,l));					
+	
+	-- Initializing vectors A2 and A3	
+	A2 := (others => '0');				
+	A3 := (others => '0');
+
+	-- Here, i is running from 0 to l-1, and if B(i) = '1', then it is adding the vector A1 to A2 (which initially 
+	-- is an all zero vector), and if B(i) = '0', then A2 remains same. And in every iteration of i, A1 is shifted 
+	-- cyclic, in left direction.
+	for i in 0 to l-1 loop
+		if B1(i) = '1' then 		
+			A2 := A2 XOR A1;		
+		else 							
+			A2 := A2;				
+		end if;
+		A3(((2*(l) - 1) - 1) downto 1) := A1(((2*(l) - 1) - 1) -1 downto 0);  				
+		A3(0) := A1((2*(l) - 1) - 1);															
+		A1 := A3;																					
+	end loop;
+	
+	
+	-- Initializing vector D1
+	D1 := (others => '0'); 
+	
+	-- Converting C into a vector B1 such that the first p bits from left side are of C and rest all '0'
+	D1(((2*(l) - 1) - 1) downto ((2*(l) - p) - 1)) := C;
+	C1 := A2;
+
+	-- Here, there are (2*(l) - p) iterations and in each iteration it checks whether the (2*(l)-i-2)th position is
+	-- '1' or not,  if it is 1 then it adds D1 to C1 (which initially was an all zero vector), whereas if the 
+	-- (2*(l)-i-2) th position is '0', then C1 remains as before, and B1 is getting shifted cycllicaly in 
+	-- right direction
+	for i in 0 to ((2*(l) - p) - 1) loop
+	
+		if ( C1(2*(l)-i-2) = '1' ) then   					
+			C1 := C1 XOR D1;
+		else
+			C1 := C1;
+		end if;
+		
+		C2((2*(l) - 1) - 2 downto 0) := D1( (2*(l) - 1) - 1 downto 1);
+		C2((2*(l) - 1) - 1) := D1(0);
+		D1 := C2;
+		
+	end loop;
+	
+	-- The function is returning vector C1 as an integer
+	
+	return to_integer(unsigned(C1));
+
+end function GAL_MUL;
+
+
+-- The function below performs the matrix multiplication operation, used to multiply matrices A and B of size pxq 
+-- and qxr, in this case we have used it to multiply a A1 matrix of 1xk size and G matrix of kxn size which we 
+-- used in getting a output vector B of n length
+
+function MAT_MUL(	x : integer := 1;
+						y : integer := 3;
+						z : integer := 8;
+						A : INTEGERARRAY;
+						B : INTEGERARRAY) return INTEGERARRAY is
+	
+	variable temp : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable sum : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable C1 : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable C : std_logic_vector(l downto 0);
+	variable a1 : integer := 0;
+
+begin
+	
+	C := std_logic_vector(to_unsigned(q, l+1));
+	
+	for i in 0 to x-1 loop
+		for j in 0 to z-1 loop
+			temp := (others => (others => 0));
+		  
+			for k in 0 to y-1 loop
+				a1 := GAL_MUL(a => A(i, k), b => B(k, j), C => C);
+				temp(i, j) := to_integer(unsigned((std_logic_vector(to_unsigned(temp(i, j), l)) )  XOR (std_logic_vector(to_unsigned(a1, l)))));
+			end loop;
+
+			sum(i, j) := temp(i, j);
+		end loop;
+   end loop;
+		
+	C1 := sum;
+	
+--   -- Convert the 2-dimensional matrix C1 to 1-dimensional output array or vector C2
+--		for i in 0 to x-1 loop
+--			for j in 0 to z-1 loop
+--				C2(((i * z) + j) to ((i * z) + j -1)) := std_logic_vector(to_unsigned(C1(i, j)));
+--			end loop;
+--		end loop;
+
+	return C1;
+	
+end function MAT_MUL;
+
+
+
+begin
+
+	-- The below process is used to convert the input vector consisting of bits into an array, of 1xk size, where
+	-- each element of the array is an integer of m-1 bits
+	process(I)
+	variable IP1 : INTEGERARRAY(0 to 0, 0 to k-1);
+	variable A : std_logic_vector(1 downto 0);  
+	begin
+
+	for j in 0 to k-1 loop 
+		A := I(((k-j)*2-1) downto ((k-j-1)*2)); 
+		IP1(0, j) := to_integer(unsigned(A));
+	end loop;
+	
+	IP <= IP1;
+	
+	I1 <= std_logic_vector(to_unsigned(q, p));
+	
+	end process;
+	
+	process(G)
+	variable G2 : INTEGERARRAY(0 to m, 0 to n-1);
+	begin
+
+		for j in 0 to n-1 loop
+			G2(0,j) := 1;
+		end loop;
+		
+		
+		for i in 1 to m loop
+			
+			for j in 0 to n-1 loop
+				
+				G2(i, j) := ((j)/ 2**(i-1)) mod q;
+
+			end loop;
+			
+		end loop;
+		
+		G1 <= G2;
+	
+	end process;
+	
+		process(G1, I1)
+	variable G3 : INTEGERARRAY(0 to k-1, 0 to n-1);
+	variable a : integer := 0;
+	variable c : integer := 0;
+	begin
+		
+		a := 0;
+		G3 := (others => (others => 1));
+		
+		for b in 0 to r loop
+		
+--			for p in 0 to b loop
+				
+				for q in 0 to b loop
+					
+					for s in 0 to b-q loop
+						
+						if (q + s = b) then
+							
+							if (s > 0) then
+								for i in 0 to s-1 loop
+									for j in 0 to n-1 loop
+										c := GAL_MUL( a => G3(a, j), b => G1(1, j), C => I1);
+										G3(a, j) := c;
+									end loop;
+								end loop;
+							end if;
+
+							if (q > 0) then
+								for i in 0 to q-1 loop
+									for j in 0 to n-1 loop
+										c := GAL_MUL( a => G3(a, j), b => G1(2, j), C => I1);
+										G3(a, j) := c;
+									end loop;
+								end loop;
+							end if;
+
+--							if (p > 0) then
+--								for i in 0 to p-1 loop
+--									for j in 0 to n-1 loop
+--										c := GAL_MUL( a => G3(a, j), b => G1(3, j), C => I1);
+--										G3(a, j) := c;
+--									end loop;
+--								end loop;
+--							end if;
+							
+							a := a + 1;
+						
+						end if;
+						
+					end loop;
+					
+				end loop;
+
+--			end loop;
+		
+		end loop;
+		
+		G <= G3;
+		
+
+	end process;
+	
+	process(IP, G)
+	begin
+	
+		OP <= MAT_MUL(x => 1, y => k, z => n, A => IP, B => G);
+		
+	end process;
+	
+	-- The below function is used to convert the output integer array OP, into output vector O, which is the binary
+	-- representation of the integers of the array OP, in serial order, where binary representation of each integer
+	-- is of l length
+	process(OP)
+	begin
+	
+	for i in 0 to n-1 loop
+		O( ((n-i)*(l) - 1) downto ((n-i-1)*(l)) ) <= std_logic_vector(to_unsigned(OP(0, i), l));
+	end loop;
+	
+	
+	end process;
+
+end architecture;
