@@ -1,6 +1,6 @@
 # Reed Muller code using VHDL
 
-This repository contains the VHDL implementation of the Reed Muller code, including both the encoder and decoder, as part of my final year B.Tech project at IIT Goa. The project is focused on designing, simulating, and performing the hardware implementation of these codes on FPGA boards to enhance error detection and correction in communication systems.
+This repository contains the VHDL implementation of the Reed Muller code, including both the encoder and decoder, as part of my final year B.Tech project. The project is focused on designing, simulating, and performing the hardware implementation of these codes on FPGA boards to enhance error detection and correction in communication systems.
 
 # Project Overview
 Reed Muller codes are a class of linear block codes known for their simplicity and effectiveness in error correction. This project involves the design of both the encoder and decoder for Reed Muller codes using VHDL. The final objective is to deploy the design onto FPGA hardware and verify its functionality in real-world applications.
