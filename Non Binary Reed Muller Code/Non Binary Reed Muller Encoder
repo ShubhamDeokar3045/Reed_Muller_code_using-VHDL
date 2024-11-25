@@ -1,4 +1,4 @@
--- Non-Binary Reed Solomon code Encoder
+-- Non-Binary Reed Solomon code Encoder considering Mulilinear polynomials
 library IEEE;
 use IEEE.std_logic_1164.all;
 use IEEE.numeric_std.all;
@@ -8,14 +8,14 @@ use IEEE.numeric_std.all;
 
 entity RME is 
 	generic(
-		m : integer := 2;				-- No. of variables in the polynomial
+		m : integer := 3;				-- No. of variables in the polynomial
 		r : integer := 2;				-- Degree of the polynomial, 	r is less than or equal to m
 		q : integer := 4;				-- Size of the Field, i,e. operating in GF(q), q is a prime number, or a number which is a power of a prime number
 		l : integer := 2;				-- Length of each symbol will depend upon field size, intgeral value just greater than or equal to 
 											-- {[log(q) / log(2)]} The division returns only divisor
 		p : integer := 3;				-- No. of bits required for binary representation of q
-		k : integer := 6;				-- No. of input bits, k = (r+m) C (r)
-		n : integer := 16); 			-- No. of output bits, n = q^m
+		k : integer := 7;				-- No. of input bits, k = sum of [ (m choose i) * (q-1)**i] from i=0 to r
+		n : integer := 64); 			-- No. of output bits, n = q^m
 
 	port(	
 		I : in std_logic_vector( (k*l) - 1 downto 0);							-- Input vector
@@ -32,6 +32,10 @@ signal OP : INTEGERARRAY(0 to 0, 0 to n-1);			-- A Matrix consisting of integers
 signal G1 : INTEGERARRAY(0 to m, 0 to n-1);
 signal I1 : std_logic_vector(p-1 downto 0);
 
+-- Define a 2D array (matrix) type with m columns
+type TwoDimensionalArray is array (natural range <>) of std_logic_vector(m-1 downto 0); 
+signal S : TwoDimensionalArray(0 to k-1);  -- Length of array depends on 2^m
+	
 
 -- The below function GAL_MUL is used to multiply two integers, a and b, each of whose bits representation will 
 -- be of m-1 length, respectively. And the output would be part of GF(2**(m-1)), which depends on C.
@@ -135,17 +139,44 @@ begin
    end loop;
 		
 	C1 := sum;
-	
---   -- Convert the 2-dimensional matrix C1 to 1-dimensional output array or vector C2
---		for i in 0 to x-1 loop
---			for j in 0 to z-1 loop
---				C2(((i * z) + j) to ((i * z) + j -1)) := std_logic_vector(to_unsigned(C1(i, j)));
---			end loop;
---		end loop;
 
 	return C1;
 	
 end function MAT_MUL;
+
+    -- Function to compute NCR (n choose r)
+    function NCR (a : integer;
+                  b : integer) return integer is
+        variable x : integer := 0;
+        variable y : integer := 0;
+    begin
+        -- Handle base cases where b = 0 or b = a
+        if (b = 0) or (b = a) then
+            x := 1;
+        elsif (b > a) then
+            -- Invalid case, return 0
+            x := 0;
+        else
+            -- Optimization: Choose the smaller of b and a-b
+            if (b > a - b) then
+                y := a - b;
+            else 
+                y := b;
+            end if;
+
+            -- Initialize result x to 1
+            x := 1;
+
+            -- Loop to calculate the binomial coefficient iteratively (bounded by static y)
+            for i in 0 to y-1 loop
+                x := x * (a - i);
+                x := x / (i + 1);
+            end loop;
+        end if;
+
+        -- Return the computed binomial coefficient
+        return x;
+    end function NCR;
 
 
 
@@ -169,7 +200,7 @@ begin
 	
 	end process;
 	
-	process(G)
+	process(I)
 	variable G2 : INTEGERARRAY(0 to m, 0 to n-1);
 	begin
 
@@ -182,7 +213,7 @@ begin
 			
 			for j in 0 to n-1 loop
 				
-				G2(i, j) := ((j)/ 2**(i-1)) mod q;
+				G2(i, j) := ((j)/ q**(i-1)) mod q;
 
 			end loop;
 			
@@ -192,62 +223,80 @@ begin
 	
 	end process;
 	
-		process(G1, I1)
+	process(I)	
+	variable x1, y, z, r, r1 : integer := 0;
+	variable S1 : std_logic_vector(m-1 downto 0);
+	variable S2 : TwoDimensionalArray(0 to k-1);
+	begin
+
+		-- Reset z and r at the start
+		x1 := 0;
+		r := 0;
+		z := 0;
+		r1 := 0;
+		
+		S2 := (others => ( others => '0'));
+		
+		for j in 0 to m loop
+        -- Calculate NCR for each value of x1
+        r := NCR(m, x1);
+
+        -- Loop to generate sequences and populate array S
+        for i in 0 to ((2**m)-1) loop
+            if (r1 < k) then
+                -- Convert integer i to std_logic_vector S1
+                S1 := std_logic_vector(to_unsigned(i, m));
+                 
+                -- Count number of 1s in S1
+                y := 0;
+                for l in 0 to m-1 loop
+                    if S1(l) = '1' then
+                        y := y + 1;
+                    end if;
+                end loop;
+                 
+                -- Store the sequence if it matches the number of 1s
+                if y = x1 then
+                    S2(r1) := S1;  -- Store in array S2
+                    z := z + 1;
+                    r1 := r1 + 1;
+                end if;
+                 
+                -- Increment x1 if z reaches r
+                if z = r then
+                    x1 := x1 + 1;
+                    z := 0;
+                    exit;  -- Exit the inner loop when condition is met
+                end if;
+            else
+                exit;  -- Exit the outer loop when z reaches 2^m
+            end if;
+        end loop;
+
+		end loop;
+
+		
+		S <= S2;
+			
+	end process;
+	
+	
+	process(G1, I1, S)
 	variable G3 : INTEGERARRAY(0 to k-1, 0 to n-1);
-	variable a : integer := 0;
 	variable c : integer := 0;
 	begin
 		
-		a := 0;
 		G3 := (others => (others => 1));
 		
-		for b in 0 to r loop
-		
---			for p in 0 to b loop
-				
-				for q in 0 to b loop
-					
-					for s in 0 to b-q loop
-						
-						if (q + s = b) then
-							
-							if (s > 0) then
-								for i in 0 to s-1 loop
-									for j in 0 to n-1 loop
-										c := GAL_MUL( a => G3(a, j), b => G1(1, j), C => I1);
-										G3(a, j) := c;
-									end loop;
-								end loop;
-							end if;
-
-							if (q > 0) then
-								for i in 0 to q-1 loop
-									for j in 0 to n-1 loop
-										c := GAL_MUL( a => G3(a, j), b => G1(2, j), C => I1);
-										G3(a, j) := c;
-									end loop;
-								end loop;
-							end if;
-
---							if (p > 0) then
---								for i in 0 to p-1 loop
---									for j in 0 to n-1 loop
---										c := GAL_MUL( a => G3(a, j), b => G1(3, j), C => I1);
---										G3(a, j) := c;
---									end loop;
---								end loop;
---							end if;
-							
-							a := a + 1;
-						
-						end if;
-						
+		for i in 0 to k-1 loop
+			for j in 0 to m-1 loop
+				if (S(i)(j) = '1') then
+					for z1 in 0 to n-1 loop
+						c := GAL_MUL( a => G3(i, z1), b => G1(j + 1, z1), C => I1);
+						G3(i, z1) := c;
 					end loop;
-					
-				end loop;
-
---			end loop;
-		
+				end if;
+			end loop;
 		end loop;
 		
 		G <= G3;
@@ -276,3 +325,4 @@ begin
 	end process;
 
 end architecture;
+
