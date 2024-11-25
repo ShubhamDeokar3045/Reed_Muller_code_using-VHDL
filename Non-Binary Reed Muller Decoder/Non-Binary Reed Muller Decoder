@@ -1,0 +1,456 @@
+-- Non-Binary Reed Solomon code Encoder considering Mulilinear polynomials
+library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+
+
+-- Entity declaration
+
+entity RMD is 
+	generic(
+		m : integer := 3;				-- No. of variables in the polynomial
+		r : integer := 2;				-- Degree of the polynomial, 	r is less than or equal to m
+		q : integer := 4;				-- Size of the Field, i,e. operating in GF(q), q is a prime number, or a number which is a power of a prime number
+		l : integer := 2;				-- Length of each symbol will depend upon field size, intgeral value just greater than or equal to 
+											-- {[log(q) / log(2)]} The division returns only divisor
+		p : integer := 3;				-- No. of bits required for binary representation of q
+		k : integer := 7;				-- No. of input bits, k = (r+m) C (r)
+		n : integer := 64); 			-- No. of output bits, n = q^m
+
+	port(	
+		I : in std_logic_vector( (n*l) - 1 downto 0);							-- Input vector
+		O : out std_logic_vector( (k*l) - 1 downto 0));							-- Output vector
+end entity; 	
+
+architecture Behavorial of RMD is
+
+-- The type INTEGERARRAY is used to define a 2-dimensioned matrix consisting of integers
+type INTEGERARRAY is array (natural range <>, natural range <>) of integer;
+signal IP : INTEGERARRAY(0 to 0, 0 to n-1);			-- A Matrix consisting of integers made from Input, of k length
+signal G : INTEGERARRAY(0 to k-1, 0 to n-1);			-- Generator Matrix
+signal OP : INTEGERARRAY(0 to 0, 0 to k-1);			-- A Matrix consisting of integers made from Output, of n length
+signal G1 : INTEGERARRAY(0 to m, 0 to n-1);
+signal I1 : std_logic_vector(p-1 downto 0);
+
+-- Define a 2D array (matrix) type with m columns
+type TwoDimensionalArray2 is array (natural range <>) of std_logic_vector(m-1 downto 0); 
+signal S : TwoDimensionalArray2(0 to k-1);  -- Length of array depends on k
+	
+
+-- Function to compute NCR (n choose r)
+function NCR ( a : integer;
+					b : integer) return integer is
+			variable x : integer := 0;
+			variable y : integer := 0;
+begin
+	-- Handle base cases where b = 0 or b = a
+	if (b = 0) or (b = a) then
+		x := 1;
+	elsif (b > a) then
+	-- Invalid case, return 0
+		x := 0;
+	else
+	-- Optimization: Choose the smaller of b and a-b
+		if (b > a - b) then
+			y := a - b;
+		else 
+			y := b;
+		end if;
+		
+		-- Initialize result x to 1
+		x := 1;
+		
+		-- Loop to calculate the binomial coefficient iteratively (bounded by static y)
+		for i in 0 to y-1 loop
+			x := x * (a - i);
+			x := x / (i + 1);
+		end loop;
+	end if;
+
+	-- Return the computed binomial coefficient
+	return x;
+
+end function NCR;
+	
+
+-- The below function GAL_MUL is used to multiply two integers, a and b, each of whose bits representation will 
+-- be of m-1 length, respectively. And the output would be part of GF(2**(m-1)), which depends on C.
+
+function GAL_MUL( a : integer := 7;
+						b : integer := 7;
+						C : std_logic_vector(p-1 downto 0)) return integer is
+	variable A1, A2, A3 : std_logic_vector( ( (2*(l)-1) - 1) downto 0); 
+	variable B1 : std_logic_vector(l-1 downto 0);
+	variable C1, C2, C3, D1 : std_logic_vector( ((2*(l) - 1) - 1) downto 0);
+
+begin
+
+	-- Converting integer a into a vector A1, which is its binary representation of length 2*(l)-1 and an integer b 
+	-- into a vector B1, which is its binary representation of length l
+	A1(((2*(l)-1) - 1) downto 0) := std_logic_vector(to_unsigned(a,2*(l)-1));
+	B1(l-1 downto 0) := std_logic_vector(to_unsigned(b,l));					
+	
+	-- Initializing vectors A2 and A3	
+	A2 := (others => '0');				
+	A3 := (others => '0');
+
+	-- Here, i is running from 0 to l-1, and if B(i) = '1', then it is adding the vector A1 to A2 (which initially 
+	-- is an all zero vector), and if B(i) = '0', then A2 remains same. And in every iteration of i, A1 is shifted 
+	-- cyclic, in left direction.
+	for i in 0 to l-1 loop
+		if B1(i) = '1' then 		
+			A2 := A2 XOR A1;		
+		else 							
+			A2 := A2;				
+		end if;
+		A3(((2*(l) - 1) - 1) downto 1) := A1(((2*(l) - 1) - 1) -1 downto 0);  				
+		A3(0) := A1((2*(l) - 1) - 1);															
+		A1 := A3;																					
+	end loop;
+	
+	
+	-- Initializing vector D1
+	D1 := (others => '0'); 
+	
+	-- Converting C into a vector B1 such that the first p bits from left side are of C and rest all '0'
+	D1(((2*(l) - 1) - 1) downto ((2*(l) - p) - 1)) := C;
+	C1 := A2;
+
+	-- Here, there are (2*(l) - p) iterations and in each iteration it checks whether the (2*(l)-i-2)th position is
+	-- '1' or not,  if it is 1 then it adds D1 to C1 (which initially was an all zero vector), whereas if the 
+	-- (2*(l)-i-2) th position is '0', then C1 remains as before, and B1 is getting shifted cycllicaly in 
+	-- right direction
+	for i in 0 to ((2*(l) - p) - 1) loop
+	
+		if ( C1(2*(l)-i-2) = '1' ) then   					
+			C1 := C1 XOR D1;
+		else
+			C1 := C1;
+		end if;
+		
+		C2((2*(l) - 1) - 2 downto 0) := D1( (2*(l) - 1) - 1 downto 1);
+		C2((2*(l) - 1) - 1) := D1(0);
+		D1 := C2;
+		
+	end loop;
+	
+	-- The function is returning vector C1 as an integer
+	
+	return to_integer(unsigned(C1));
+
+end function GAL_MUL;
+
+
+-- The function below performs the matrix multiplication operation, used to multiply matrices A and B of size pxq 
+-- and qxr, in this case we have used it to multiply a A1 matrix of 1xk size and G matrix of kxn size which we 
+-- used in getting a output vector B of n length
+
+function MAT_MUL(	x : integer := 1;
+						y : integer := 3;
+						z : integer := 8;
+						A : INTEGERARRAY;
+						B : INTEGERARRAY) return INTEGERARRAY is
+	
+	variable temp : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable sum : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable C1 : INTEGERARRAY(0 to x-1, 0 to z-1);
+	variable C : std_logic_vector(l downto 0);
+	variable a1 : integer := 0;
+
+begin
+	
+	C := std_logic_vector(to_unsigned(q, l+1));
+	
+	for i in 0 to x-1 loop
+		for j in 0 to z-1 loop
+			temp := (others => (others => 0));
+		  
+			for k in 0 to y-1 loop
+				a1 := GAL_MUL(a => A(i, k), b => B(k, j), C => C);
+				temp(i, j) := to_integer(unsigned((std_logic_vector(to_unsigned(temp(i, j), l)) )  XOR (std_logic_vector(to_unsigned(a1, l)))));
+			end loop;
+
+			sum(i, j) := temp(i, j);
+		end loop;
+   end loop;
+		
+	C1 := sum;
+
+	return C1;
+	
+end function MAT_MUL;
+
+
+function MAJ_DEC (a : integer := 2;
+					b : integer := 1;
+					I1 : std_logic_vector(m-1 downto 0);
+					I2 : INTEGERARRAY(0 to 0, 0 to n-1)) return integer is
+					
+	variable A1 : std_logic_vector(a-1 downto 0);
+	variable B1 : std_logic_vector(b-1 downto 0);
+	variable U : std_logic_vector(a+b-1 downto 0);
+	variable z, w, x1, x4, x5, x6 : integer;
+	variable x2 : INTEGERARRAY(0 to 0, 0 to (q**a)-1);
+	variable x3 : INTEGERARRAY(0 to 0, 0 to q-1);
+	variable C1, C2, C3 : std_logic_vector(a+b-1 downto 0);
+begin
+
+	x2 := (others => (others => 0));
+	x3 := (others => (others => 0));
+
+
+	for i3 in 0 to (2**a)-1 loop
+		
+		for i in 0 to (2**a)-1 loop
+			for j in 0 to (2**b)-1 loop
+					z := 0; 
+					w := 0;
+					A1 := std_logic_vector(to_unsigned(i, a));
+					B1 := std_logic_vector(to_unsigned(j, b));
+
+				for c in 0 to a+b-1 loop
+					if (I1(c) = '1') then
+						U(c) := B1(z);
+						z := z + 1;
+					else
+						U(c) := A1(w);
+						w := w + 1;
+					end if;
+				end loop;
+				 
+				x1 := 0;
+				for i1 in 0 to a+b-1 loop
+					if U(i1) = '1' then
+						x1 := x1 + q**i1;
+					end if;
+				end loop;
+			 
+				x6 := x1 + (i3 / (2**a)) * ( n / (2**a));
+				 
+				x2(0, i + i3*(2**a)) := to_integer(unsigned( (std_logic_vector(to_unsigned (x2(0, i + i3*(2**a)), a+b))) XOR (std_logic_vector(to_unsigned(I2(0, x6), a+b))) ));
+				 
+			end loop;        
+		end loop;
+	end loop;
+
+	for j in 0 to (q**a)-1 loop
+		for j1 in 0 to q-1 loop
+			if (x2(0, j) = j1) then 
+				x3(0, j1) := x3(0, j1) + 1;
+			end if;
+		end loop;
+	end loop;
+
+	x4 := 0;
+	x5 := 0;
+	for j in 0 to q-1 loop
+		if (x3(0, j) >= x4) then
+			x4 := x3(0, j);
+			x5 := j;
+		end if;
+	end loop;
+	
+	return x5;
+		
+end function;
+
+begin
+
+	-- The below process is used to convert the input vector consisting of bits into an array, of 1xk size, where
+	-- each element of the array is an integer of m-1 bits
+	process(I)
+	variable IP1 : INTEGERARRAY(0 to 0, 0 to n-1);
+	variable A : std_logic_vector(1 downto 0);  
+	begin
+
+	for j in 0 to n-1 loop 
+		A := I(((n-j)*2-1) downto ((n-j-1)*2)); 
+		IP1(0, j) := to_integer(unsigned(A));
+	end loop;
+	
+	IP <= IP1;
+	
+	I1 <= std_logic_vector(to_unsigned(q, p));
+	
+	end process;
+	
+	process(G)
+	variable G2 : INTEGERARRAY(0 to m, 0 to n-1);
+	begin
+
+		for j in 0 to n-1 loop
+			G2(0,j) := 1;
+		end loop;
+		
+		
+		for i in 1 to m loop
+			
+			for j in 0 to n-1 loop
+				
+				G2(i, j) := ((j)/ q**(i-1)) mod q;
+
+			end loop;
+			
+		end loop;
+		
+		G1 <= G2;
+	
+	end process;
+	
+	process(I)	
+	variable x1, y, z, r2, r1 : integer := 0;
+	variable S1 : std_logic_vector(m-1 downto 0);
+	variable S2 : TwoDimensionalArray2(0 to k-1);
+	begin
+
+		-- Reset z and r2 at the start
+		x1 := 0;
+		r2 := 0;
+		z := 0;
+		r1 := 0;
+		
+		S2 := (others => ( others => '0'));
+		
+		for j in 0 to r loop
+        -- Calculate NCR for each value of x1
+        r2 := NCR(m, x1);
+
+        -- Loop to generate sequences and populate array S
+        for i in 0 to ((2**m)-1) loop
+            if (z /= 2**m) then
+                -- Convert integer i to std_logic_vector S1
+                S1 := std_logic_vector(to_unsigned(i, m));
+                 
+                -- Count number of 1s in S1
+                y := 0;
+                for l in 0 to m-1 loop
+                    if S1(l) = '1' then
+                        y := y + 1;
+                    end if;
+                end loop;
+                 
+                -- Store the sequence if it matches the number of 1s
+                if y = x1 then
+                    S2(r1) := S1;  -- Store in array S2
+                    z := z + 1;
+                    r1 := r1 + 1;
+                end if;
+                 
+                -- Increment x1 if z reaches r2
+                if z = r2 then
+                    x1 := x1 + 1;
+                    z := 0;
+                    exit;  -- Exit the inner loop when condition is met
+                end if;
+            else
+                exit;  -- Exit the outer loop when z reaches 2^m
+            end if;
+        end loop;
+
+		end loop;
+
+		
+		S <= S2;
+			
+	end process;
+	
+	
+	process(G1, I1, S)
+	variable G3 : INTEGERARRAY(0 to k-1, 0 to n-1);
+	variable c : integer := 0;
+	begin
+		
+		G3 := (others => (others => 1));
+		
+		for i in 0 to k-1 loop
+			for j in 0 to m-1 loop
+				if (S(i)(j) = '1') then
+					for z1 in 0 to n-1 loop
+						c := GAL_MUL( a => G3(i, z1), b => G1(j, z1), C => I1);
+						G3(i, z1) := c;
+					end loop;
+				end if;
+			end loop;
+		end loop;
+		
+		G <= G3;
+		
+
+	end process;
+	
+	
+	process(IP, S, G)
+	variable z1 : integer;
+	variable a1, a2, count, a3 : integer;
+	variable C1 : INTEGERARRAY(0 to 0, 0 to k-1);
+	variable C3 : INTEGERARRAY(0 to 0, 0 to k-1);
+	variable C2, C4 : INTEGERARRAY(0 to 0, 0 to n-1);
+	variable C6 : INTEGERARRAY(0 to 0, 0 to n-1);
+	variable C5 : std_logic_vector(m-1 downto 0);
+	begin
+	
+		count := 0;
+		C2 := IP;
+		C3 := (others => (others => 0));
+		
+		for j in 0 to r-1 loop
+			
+			a1 := NCR(a => m, b => r-j);
+			
+			C1 := (others => (others => 0));
+			
+			for h in 0 to a1-1 loop
+				
+				C5 := S(k-1-count);
+				z1 := MAJ_DEC(a => m-r+j, b => r-j, I1 => C5, I2 => C2);
+				C1(0, k-1-count) := z1;
+				C3(0, k-1-count) := C1(0, k-1-count);
+				count := count + 1;
+				
+			end loop;
+
+			C4 := MAT_MUL(x => 1, y => k, z => n, A => C1, B => G); 
+			
+			for j1 in 0 to n-1 loop
+				C2(0, j1) := to_integer(unsigned( (std_logic_vector(to_unsigned(C2(0, j1), l))) XOR (std_logic_vector(to_unsigned(C4(0, j1), l))) ));
+			end loop;
+			
+		end loop;	
+		
+		C6 := (others => (others => 0));
+		for j in 0 to ((q**m)-1) loop
+			for j1 in 0 to q-1 loop
+				if (C2(0, j) = j1) then 
+					C6(0, j1) := C6(0, j1) + 1;
+				end if;
+			end loop;
+		end loop;
+
+		a3 := 0;
+		for j in 0 to q-1 loop
+			if (C6(0, j) >= a3) then
+				a3 := C6(0, j);
+				C3(0, 0) := j;
+			end if;
+		end loop;
+		
+		OP <= C3;
+		
+	end process;
+	
+	
+	-- The below function is used to convert the output integer array OP, into output vector O, which is the binary
+	-- representation of the integers of the array OP, in serial order, where binary representation of each integer
+	-- is of l length
+	process(OP)
+	begin
+	
+	for i in 0 to k-1 loop
+		O( ((k-i)*(l) - 1) downto ((k-i-1)*(l)) ) <= std_logic_vector(to_unsigned(OP(0, i), l));
+	end loop;
+	
+	
+	end process;
+
+end architecture;
+
