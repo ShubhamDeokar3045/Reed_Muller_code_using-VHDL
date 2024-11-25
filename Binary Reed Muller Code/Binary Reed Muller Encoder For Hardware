@@ -1,0 +1,481 @@
+library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+
+entity BRME_HW is
+	generic(
+			r : integer := 2;
+			m : integer := 4;
+			k : integer := 11; -- No. of input bits
+			n : integer := 16); -- Length of codeword
+	port (
+		CLK : in std_logic; -- Clock signal
+		I : in std_logic;  -- Input vector
+		RESET : in std_logic;  -- Reset Input
+		O : out std_logic_vector (41 downto 0));	-- Output vector
+end entity;
+
+architecture Behavorial of BRME_HW is 
+
+signal IP : std_logic_vector(k-1 downto 0);
+signal IP2 : std_logic_vector(k-1 downto 0);
+
+type TwoDimensionalArray is array (natural range <>) of std_logic_vector(n-1 downto 0); 
+									-- Defining a matrix type which has n columns
+type TwoDimensionalArray1 is array (natural range <>) of std_logic_vector(k-1 downto 0); --
+									-- Defining a matrix type which has k columns
+signal G1 : TwoDimensionalArray(0 to m);
+signal G : TwoDimensionalArray(0 to k-1);
+
+    -- Define a 2D array (matrix) type with m columns
+type TwoDimensionalArray2 is array (natural range <>) of std_logic_vector(m-1 downto 0); 
+signal S : TwoDimensionalArray2(0 to k-1);  -- Length of array depends on 2^m
+
+signal B : std_logic_vector(n-1 downto 0);
+signal OP : std_logic_vector(23 downto 0);
+
+
+function BCD2SSD( A : std_logic_vector(3 downto 0)) return std_logic_vector is
+	variable B : std_logic_vector(6 downto 0);
+
+begin
+
+	B(6) := NOT( ( A(2) XNOR A(0) ) OR (A(1)) OR (A(3)) );
+	B(5) := NOT( ( NOT(A(2)) ) OR ( A(1) XNOR A(0) ) );
+	B(4) := NOT( ( NOT(A(1)) ) OR A(0) OR A(2) );
+	B(3) := NOT( A(3) OR ( (NOT(A(2))) AND (NOT(A(0))) ) OR ( (NOT(A(2))) AND ( A(1) ) ) OR ( ( A(1) ) AND (NOT(A(0))) ) OR ( ( A(2) ) AND (NOT(A(1))) AND ( A(0) ) ) );
+	B(2) := NOT( ( (NOT(A(0))) AND  (NOT(A(2))) ) OR ( (NOT(A(0))) AND (A(1)) ) );
+	B(1) := NOT( A(3) OR ( (A(2)) AND (NOT(A(1))) ) OR ( (A(2)) AND (NOT(A(0))) ) OR ( (NOT(A(1))) AND (NOT(A(0))) ) );
+	B(0) := NOT( A(3) OR ( (A(2)) XOR (A(1)) ) OR ( (A(2)) AND (NOT(A(0))) ) );
+	
+	return B;
+	
+end function BCD2SSD;
+
+
+
+-- Function to compute NCR (n choose r)
+function NCR ( a : integer;
+					b : integer) return integer is
+			variable x : integer := 0;
+			variable y : integer := 0;
+begin
+	-- Handle base cases where b = 0 or b = a
+	if (b = 0) or (b = a) then
+		x := 1;
+	elsif (b > a) then
+	-- Invalid case, return 0
+		x := 0;
+	else
+	-- Optimization: Choose the smaller of b and a-b
+		if (b > a - b) then
+			y := a - b;
+		else 
+			y := b;
+		end if;
+		
+		-- Initialize result x to 1
+		x := 1;
+		
+		-- Loop to calculate the binomial coefficient iteratively (bounded by static y)
+		for i in 0 to y-1 loop
+			x := x * (a - i);
+			x := x / (i + 1);
+		end loop;
+	end if;
+
+	-- Return the computed binomial coefficient
+	return x;
+
+end function NCR;
+
+-- The function below performs the matrix multiplication operation, used to multiply matrices A and B of size pxq 
+-- and qxr, in this case we have used it to multiply a A1 matrix of 1xk size and G matrix of kxn size which we 
+-- used in getting a output vector B of n length
+
+function MAT_MUL(	p : integer := 1;
+						q : integer := 3;
+						r : integer := 8;
+						A : TwoDimensionalArray1;
+						B : TwoDimensionalArray) return std_logic_vector is
+	
+	type TwoDimensionalArray2 is array (natural range <>) of std_logic_vector(r-1 downto 0);
+	variable temp : TwoDimensionalArray2(0 to p-1);
+	variable sum : TwoDimensionalArray2(0 to p-1);
+	variable C1 : TwoDimensionalArray2(0 to p-1);
+	variable C : std_logic_vector(p*r-1 downto 0);
+
+begin
+	
+	for i in 0 to p-1 loop
+		for j in 0 to r-1 loop
+			temp := (others => (others => '0'));
+		  
+			for k in 0 to q-1 loop
+				temp(i)(j) := temp(i)(j) XOR (A(i)(k) AND B(k)(j));
+			end loop;
+
+			sum(i)(j) := temp(i)(j);
+		end loop;
+   end loop;
+		
+	C1 := sum;
+	
+   -- Convert the 2-dimensional matrix C1 to 1-dimensional output array or vector C
+		for i in 0 to p-1 loop
+			for j in 0 to r-1 loop
+				C((i * r) + j) := C1(i)(j);
+			end loop;
+		end loop;
+
+	return C;
+	
+end function MAT_MUL;
+
+begin 
+	
+	process(I, RESET, CLK)
+	variable IP1 : std_logic_vector(k-1 downto 0);
+	variable IP3 : std_logic_Vector(k-1 downto 0);
+	variable x : integer := 0;
+	begin
+		
+		if (rising_edge(CLK)) then
+			if ((RESET = '1')) then
+				IP1 := (others => '0');
+				x := 0;
+				IP <= IP1;
+			elsif ((x = k)) then
+				IP <= IP1;
+				IP1 := (others => '0');
+				x := 0;
+			else
+				IP1 := IP3(k-2 downto 0) & I;
+				x := x + 1;
+			end if;
+		end if;
+		IP3 := IP1;
+		IP2 <= IP1;
+	end process;
+	
+	process(IP)
+	variable G2 : TwoDimensionalArray(0 to m);
+	begin
+
+		for j in 0 to n-1 loop
+			G2(0)(j) := '1';
+		end loop;
+		
+		library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+
+entity BRME_HW is
+	generic(
+			r : integer := 2;
+			m : integer := 4;
+			k : integer := 11; -- No. of input bits
+			n : integer := 16); -- Length of codeword
+	port (
+		CLK : in std_logic; -- Clock signal
+		I : in std_logic;  -- Input vector
+		RESET : in std_logic;  -- Reset Input
+		O : out std_logic_vector (41 downto 0));	-- Output vector
+end entity;
+
+architecture Behavorial of BRME_HW is 
+
+signal IP : std_logic_vector(k-1 downto 0);
+signal IP2 : std_logic_vector(k-1 downto 0);
+
+type TwoDimensionalArray is array (natural range <>) of std_logic_vector(n-1 downto 0); 
+									-- Defining a matrix type which has n columns
+type TwoDimensionalArray1 is array (natural range <>) of std_logic_vector(k-1 downto 0); --
+									-- Defining a matrix type which has k columns
+signal G1 : TwoDimensionalArray(0 to m);
+signal G : TwoDimensionalArray(0 to k-1);
+
+    -- Define a 2D array (matrix) type with m columns
+type TwoDimensionalArray2 is array (natural range <>) of std_logic_vector(m-1 downto 0); 
+signal S : TwoDimensionalArray2(0 to k-1);  -- Length of array depends on 2^m
+
+signal B : std_logic_vector(n-1 downto 0);
+signal OP : std_logic_vector(23 downto 0);
+
+
+function BCD2SSD( A : std_logic_vector(3 downto 0)) return std_logic_vector is
+	variable B : std_logic_vector(6 downto 0);
+
+begin
+
+	B(6) := NOT( ( A(2) XNOR A(0) ) OR (A(1)) OR (A(3)) );
+	B(5) := NOT( ( NOT(A(2)) ) OR ( A(1) XNOR A(0) ) );
+	B(4) := NOT( ( NOT(A(1)) ) OR A(0) OR A(2) );
+	B(3) := NOT( A(3) OR ( (NOT(A(2))) AND (NOT(A(0))) ) OR ( (NOT(A(2))) AND ( A(1) ) ) OR ( ( A(1) ) AND (NOT(A(0))) ) OR ( ( A(2) ) AND (NOT(A(1))) AND ( A(0) ) ) );
+	B(2) := NOT( ( (NOT(A(0))) AND  (NOT(A(2))) ) OR ( (NOT(A(0))) AND (A(1)) ) );
+	B(1) := NOT( A(3) OR ( (A(2)) AND (NOT(A(1))) ) OR ( (A(2)) AND (NOT(A(0))) ) OR ( (NOT(A(1))) AND (NOT(A(0))) ) );
+	B(0) := NOT( A(3) OR ( (A(2)) XOR (A(1)) ) OR ( (A(2)) AND (NOT(A(0))) ) );
+	
+	return B;
+	
+end function BCD2SSD;
+
+
+
+-- Function to compute NCR (n choose r)
+function NCR ( a : integer;
+					b : integer) return integer is
+			variable x : integer := 0;
+			variable y : integer := 0;
+begin
+	-- Handle base cases where b = 0 or b = a
+	if (b = 0) or (b = a) then
+		x := 1;
+	elsif (b > a) then
+	-- Invalid case, return 0
+		x := 0;
+	else
+	-- Optimization: Choose the smaller of b and a-b
+		if (b > a - b) then
+			y := a - b;
+		else 
+			y := b;
+		end if;
+		
+		-- Initialize result x to 1
+		x := 1;
+		
+		-- Loop to calculate the binomial coefficient iteratively (bounded by static y)
+		for i in 0 to y-1 loop
+			x := x * (a - i);
+			x := x / (i + 1);
+		end loop;
+	end if;
+
+	-- Return the computed binomial coefficient
+	return x;
+
+end function NCR;
+
+-- The function below performs the matrix multiplication operation, used to multiply matrices A and B of size pxq 
+-- and qxr, in this case we have used it to multiply a A1 matrix of 1xk size and G matrix of kxn size which we 
+-- used in getting a output vector B of n length
+
+function MAT_MUL(	p : integer := 1;
+						q : integer := 3;
+						r : integer := 8;
+						A : TwoDimensionalArray1;
+						B : TwoDimensionalArray) return std_logic_vector is
+	
+	type TwoDimensionalArray2 is array (natural range <>) of std_logic_vector(r-1 downto 0);
+	variable temp : TwoDimensionalArray2(0 to p-1);
+	variable sum : TwoDimensionalArray2(0 to p-1);
+	variable C1 : TwoDimensionalArray2(0 to p-1);
+	variable C : std_logic_vector(p*r-1 downto 0);
+
+begin
+	
+	for i in 0 to p-1 loop
+		for j in 0 to r-1 loop
+			temp := (others => (others => '0'));
+		  
+			for k in 0 to q-1 loop
+				temp(i)(j) := temp(i)(j) XOR (A(i)(k) AND B(k)(j));
+			end loop;
+
+			sum(i)(j) := temp(i)(j);
+		end loop;
+   end loop;
+		
+	C1 := sum;
+	
+   -- Convert the 2-dimensional matrix C1 to 1-dimensional output array or vector C
+		for i in 0 to p-1 loop
+			for j in 0 to r-1 loop
+				C((i * r) + j) := C1(i)(j);
+			end loop;
+		end loop;
+
+	return C;
+	
+end function MAT_MUL;
+
+begin 
+	
+	process(I, RESET, CLK)
+	variable IP1 : std_logic_vector(k-1 downto 0);
+	variable IP3 : std_logic_Vector(k-1 downto 0);
+	variable x : integer := 0;
+	begin
+		
+		if (rising_edge(CLK)) then
+			if ((RESET = '1')) then
+				IP1 := (others => '0');
+				x := 0;
+				IP <= IP1;
+			elsif ((x = k)) then
+				IP <= IP1;
+				IP1 := (others => '0');
+				x := 0;
+			else
+				IP1 := IP3(k-2 downto 0) & I;
+				x := x + 1;
+			end if;
+		end if;
+		IP3 := IP1;
+		IP2 <= IP1;
+	end process;
+	
+	process(IP)
+	variable G2 : TwoDimensionalArray(0 to m);
+	begin
+
+		for j in 0 to n-1 loop
+			G2(0)(j) := '1';
+		end loop;
+		
+		
+		for i in 1 to m loop
+			
+			for j in 0 to n-1 loop
+				
+					if ((j)/ 2**(i-1)) mod 2 = 1 then
+						G2(i)((n-1)-j) := '1';
+					else 
+						G2(i)((n-1)-j) := '0';
+					end if;
+								
+			end loop;
+			
+		end loop;
+		
+		G1 <= G2;
+		
+	end process;
+		
+	process(IP)	
+	variable x1, y, z, r1, r2 : integer := 0;
+	variable S1 : std_logic_vector(m-1 downto 0);
+	variable S2 : TwoDimensionalArray2(0 to k-1);
+	begin
+
+		-- Reset z and r2 at the start
+		x1 := 0;
+		r2 := 0;
+		z := 0;
+		r1 := 0;
+		
+		S2 := (others => ( others => '0'));
+		
+		for j in 0 to m loop
+        -- Calculate NCR for each value of x1
+        r2 := NCR(m, x1);
+
+        -- Loop to generate sequences and populate array S
+        for i in 0 to ((2**m)-1) loop
+            if (r1 < k) then
+                -- Convert integer i to std_logic_vector S1
+                S1 := std_logic_vector(to_unsigned(i, m));
+                 
+                -- Count number of 1s in S1
+                y := 0;
+                for l in 0 to m-1 loop
+                    if S1(l) = '1' then
+                        y := y + 1;
+                    end if;
+                end loop;
+                 
+                -- Store the sequence if it matches the number of 1s
+                if y = x1 then
+                    S2(r1) := S1;  -- Store in array S2
+                    z := z + 1;
+                    r1 := r1 + 1;
+                end if;
+                 
+                -- Increment x1 if z reaches r
+                if z = r2 then
+                    x1 := x1 + 1;
+                    z := 0;
+                    exit;  -- Exit the inner loop when condition is met
+                end if;
+            else
+                exit;  -- Exit the outer loop when z reaches 2^m
+            end if;
+        end loop;
+
+		end loop;
+
+		S <= S2;
+			
+	end process;
+	
+	process(S, G1)
+	variable G3 : TwoDimensionalArray(0 to k-1);
+	begin
+				
+		G3 := (others => (others => '1'));
+		
+		for i in 0 to k-1 loop
+			for j in 0 to m-1 loop
+				if (S(i)(j) = '1') then
+					for l in 0 to n-1 loop
+						G3(i)(l) := G3(i)(l) AND G1(j + 1)(l);
+					end loop;
+				end if;
+			end loop;
+		end loop;
+		
+		G <= G3;
+		
+
+	end process;
+	
+	process (IP, G)
+	variable I1 : TwoDimensionalArray1(0 to 0);
+	begin
+	
+	-- Used for converting the 1-dimensional input array or vector I to 2-dimensional matrix I1 of 1xk size
+		
+	for j in 0 to k-1 loop
+		I1(0)((k-1)-j) := IP(j); 
+	end loop;
+	
+	B <= MAT_MUL(p => 1, q => k, r => n, A => I1, B => G); 
+	
+	end process;
+		
+	process(B)
+	variable OP1 : std_logic_vector(23 downto 0);
+	variable m : integer := 0;
+	variable r : integer := 0;
+	variable d : integer := 0;
+	begin
+		
+		OP1 := (others => '0');
+		m := to_integer(unsigned(B));
+		
+		if (m < 1000000) then
+			OP1(n-1 downto 0) := B;
+			for i in 0 to 5 loop
+				r := m mod 10;
+				d := m / 10;
+				OP1((4*i+3) downto (4*i)) := std_logic_vector(to_unsigned(r,4));
+				m := d;
+			end loop;
+		end if;
+		
+		OP <= OP1;
+		
+	end process;
+	
+	process(OP)
+	variable OP2 : std_logic_vector(3 downto 0);
+	begin
+		
+		for i in 0 to 5 loop
+			OP2 := OP(4*i+3 downto 4*i);
+			O(7*i+6 downto 7*i) <= BCD2SSD(A => OP2);
+		end loop;
+		
+	end process;
+end architecture;
